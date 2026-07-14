@@ -1,0 +1,21 @@
+{
+  "name": "telegram-ios-compiler-bot",
+  "version": "1.0.0",
+  "description": "Bot de Telegram que compila proyectos C#/Avalonia UI a .ipa usando GitHub Actions macOS runners",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "telegraf": "^4.16.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["telegram", "bot", "ios", "avalonia", "dotnet", "github-actions"],
+  "license": "MIT"
+}

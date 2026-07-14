@@ -1,0 +1,119 @@
+name: iOS Avalonia Compiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: 'ID del asset del release de GitHub (enviado por el bot)'
+        required: true
+        type: string
+      project_name:
+        description: 'Nombre del proyecto (para nombrar el artefacto)'
+        required: false
+        default: 'app'
+        type: string
+      dotnet_version:
+        description: 'Versión del SDK de .NET'
+        required: false
+        default: '8.0'
+        type: string
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── 1. Descargar el ZIP del código fuente desde el release de GitHub ──
+      - name: Descargar ZIP del código fuente
+        run: |
+          mkdir -p source
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/assets/${{ inputs.asset_id }}" \
+            -o source.zip
+
+          echo "Tamaño del ZIP descargado:"
+          ls -lh source.zip
+
+          unzip -q source.zip -d source/
+          echo "Contenido del proyecto:"
+          find source -name "*.csproj" | head -10
+
+      # ── 2. Instalar el SDK de .NET ────────────────────────────────────────
+      - name: Instalar SDK de .NET ${{ inputs.dotnet_version }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      # ── 3. Instalar workload de iOS ───────────────────────────────────────
+      - name: Instalar workload de iOS
+        run: |
+          dotnet workload install ios --skip-sign-check
+          echo "Workloads instalados:"
+          dotnet workload list
+
+      # ── 4. Localizar el archivo .csproj ───────────────────────────────────
+      - name: Localizar archivo .csproj
+        id: find-proj
+        run: |
+          # Buscar el .csproj principal (excluir proyectos de Tests)
+          PROJ=$(find source -name "*.csproj" | grep -iv "test" | head -1)
+
+          if [ -z "$PROJ" ]; then
+            echo "ERROR: No se encontró un archivo .csproj en el ZIP."
+            exit 1
+          fi
+
+          echo "csproj=$PROJ" >> $GITHUB_OUTPUT
+          echo "Proyecto encontrado: $PROJ"
+
+      # ── 5. Restaurar dependencias ─────────────────────────────────────────
+      - name: Restaurar dependencias NuGet
+        run: |
+          dotnet restore "${{ steps.find-proj.outputs.csproj }}"
+
+      # ── 6. Compilar y generar el .ipa ─────────────────────────────────────
+      - name: Compilar proyecto (Release, ios-arm64)
+        run: |
+          dotnet publish "${{ steps.find-proj.outputs.csproj }}" \
+            -c Release \
+            -r ios-arm64 \
+            /p:ArchiveOnBuild=true \
+            /p:RuntimeIdentifier=ios-arm64 \
+            --self-contained true \
+            -o ./output
+
+          echo "Contenido del directorio output:"
+          ls -lh ./output/ 2>/dev/null || echo "(vacío)"
+
+      # ── 7. Localizar el .ipa generado ─────────────────────────────────────
+      - name: Localizar archivo .ipa
+        id: find-ipa
+        run: |
+          IPA=$(find . -name "*.ipa" 2>/dev/null | head -1)
+
+          if [ -z "$IPA" ]; then
+            echo "No se encontró .ipa en ./output, buscando en todo el directorio..."
+            IPA=$(find $HOME -name "*.ipa" 2>/dev/null | head -1)
+          fi
+
+          if [ -z "$IPA" ]; then
+            echo "ERROR: No se generó ningún archivo .ipa."
+            echo "Revisa que tu proyecto sea compatible con la compilación iOS."
+            exit 1
+          fi
+
+          echo "ipa_path=$IPA" >> $GITHUB_OUTPUT
+          echo "ipa_name=$(basename $IPA)" >> $GITHUB_OUTPUT
+          echo ".ipa encontrado: $IPA ($(du -h $IPA | cut -f1))"
+
+      # ── 8. Subir el .ipa como artefacto del workflow ──────────────────────
+      - name: Subir .ipa como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project_name }}-ios
+          path: ${{ steps.find-ipa.outputs.ipa_path }}
+          retention-days: 1
+          if-no-files-found: error
